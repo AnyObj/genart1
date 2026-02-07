@@ -4,7 +4,7 @@
  * Manages generation modes: on-demand, live, last-3-sentences.
  */
 
-import { analyzeText, getLastNSentences, loadModel } from './analyzer.js';
+import { analyzeText, getLastNSentences, loadModel, switchModelForLang } from './analyzer.js';
 import { AnimationEngine } from './animation.js';
 import { saveToLocal, loadAutosave, autosave, downloadAsFile } from './storage.js';
 
@@ -146,9 +146,14 @@ function scheduleAnalysis() {
 }
 
 // ===== Language Override =====
-function onLangChange() {
+async function onLangChange() {
     const val = langSelect.value;
     langOverride = val === 'auto' ? null : val;
+
+    // If a model is already loaded, try switching to the right one for this language
+    if (val !== 'auto') {
+        await switchModelForLang(val, showModelProgress);
+    }
 
     // Re-analyze with new language if there's text
     if (editor.value.trim().length > 0) {
@@ -156,6 +161,36 @@ function onLangChange() {
             ? getLastNSentences(editor.value, 3)
             : editor.value;
         runAnalysis(text);
+    }
+}
+
+function showModelProgress(update) {
+    switch (update.status) {
+        case 'loading':
+            modelStatus.classList.remove('hidden');
+            modelStatusText.classList.add('loading');
+            modelStatusText.textContent = update.message;
+            modelProgress.style.width = '0%';
+            break;
+        case 'progress':
+            modelStatus.classList.remove('hidden');
+            modelProgress.style.width = `${update.progress}%`;
+            modelStatusText.textContent = update.message;
+            break;
+        case 'ready':
+            modelStatusText.textContent = update.message;
+            modelStatusText.classList.remove('loading');
+            modelProgress.style.width = '100%';
+            loadModelBtn.classList.remove('loading');
+            loadModelBtn.classList.add('success');
+            setTimeout(() => modelStatus.classList.add('hidden'), 2000);
+            break;
+        case 'error':
+            modelStatusText.textContent = update.message;
+            modelStatusText.classList.remove('loading');
+            loadModelBtn.classList.remove('loading');
+            setTimeout(() => modelStatus.classList.add('hidden'), 3000);
+            break;
     }
 }
 
@@ -177,7 +212,7 @@ function onGenerate() {
 // ===== Analysis + Animation Update =====
 async function runAnalysis(text) {
     if (!text || text.trim().length === 0) {
-        updateMoodDisplay('calm', null, false);
+        updateMoodDisplay('calm', null, null);
         engine.setMood('calm', 1.0);
         return;
     }
@@ -186,17 +221,21 @@ async function runAnalysis(text) {
     lastAnalysis = result;
 
     const { emotion, language } = result;
-    updateMoodDisplay(emotion.dominant, language, emotion.mlEnhanced);
+    updateMoodDisplay(emotion.dominant, language, emotion);
     engine.setMood(emotion.dominant, language.speedMultiplier);
 }
 
 // ===== UI Updates =====
-function updateMoodDisplay(mood, language, mlEnhanced) {
+function updateMoodDisplay(mood, language, emotion) {
     const label = MOOD_LABELS[mood] || 'Calm';
     const icon = MOOD_ICONS[mood] || '';
 
     moodEmoji.textContent = icon;
-    moodLabel.textContent = mlEnhanced ? `${label} (AI)` : label;
+    let suffix = '';
+    if (emotion && emotion.mlEnhanced) {
+        suffix = emotion.modelType === 'sentiment' ? ' (AI multi)' : ' (AI)';
+    }
+    moodLabel.textContent = label + suffix;
 
     if (language && language.confidence > 0.1) {
         langIndicator.textContent = language.name;
@@ -254,39 +293,16 @@ async function onLoadModel() {
     modelStatus.classList.remove('hidden');
     modelStatusText.classList.add('loading');
 
-    await loadModel((update) => {
-        switch (update.status) {
-            case 'loading':
-                modelStatusText.textContent = update.message;
-                break;
-            case 'progress':
-                modelProgress.style.width = `${update.progress}%`;
-                modelStatusText.textContent = update.message;
-                break;
-            case 'ready':
-                modelStatusText.textContent = 'AI Model ready';
-                modelStatusText.classList.remove('loading');
-                modelProgress.style.width = '100%';
-                loadModelBtn.classList.remove('loading');
-                loadModelBtn.classList.add('success');
-                setTimeout(() => {
-                    modelStatus.classList.add('hidden');
-                }, 2000);
-                // Re-analyze current text with the model
-                if (editor.value.trim()) {
-                    runAnalysis(editor.value);
-                }
-                break;
-            case 'error':
-                modelStatusText.textContent = update.message;
-                modelStatusText.classList.remove('loading');
-                loadModelBtn.classList.remove('loading');
-                setTimeout(() => {
-                    modelStatus.classList.add('hidden');
-                }, 3000);
-                break;
-        }
-    });
+    // Load model based on currently selected language
+    await loadModel(showModelProgress, langOverride);
+
+    // Re-analyze current text with the model
+    if (editor.value.trim()) {
+        const text = mode === 'last3'
+            ? getLastNSentences(editor.value, 3)
+            : editor.value;
+        runAnalysis(text);
+    }
 }
 
 // ===== Start =====

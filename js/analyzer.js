@@ -302,41 +302,84 @@ function getLastNSentences(text, n = 3) {
     return sentences.slice(-n).join(' ');
 }
 
-// ===== ML Model (Transformers.js) =====
-// Model: Xenova/distilbert-base-uncased-emotion
-// Labels: joy, sadness, anger, fear, surprise, love
-let mlClassifier = null;
+// ===== ML Models (Transformers.js) =====
+// English: Xenova/distilbert-base-uncased-emotion → joy, sadness, anger, fear, surprise, love
+// Multilingual (IT/ES/FR/DE/PT...): Xenova/distilbert-base-multilingual-cased-sentiments-student → positive, negative, neutral
+const ML_MODELS = {
+    emotion: {
+        id: 'Xenova/distilbert-base-uncased-emotion',
+        type: 'emotion',
+        langs: ['en'],
+        labels: ['joy', 'sadness', 'anger', 'fear', 'surprise', 'love'],
+    },
+    multilingual: {
+        id: 'Xenova/distilbert-base-multilingual-cased-sentiments-student',
+        type: 'sentiment',
+        langs: ['it', 'es', 'fr', 'de', 'pt', 'ar', 'zh', 'hi', 'ja', 'ko', 'ru'],
+        labels: ['positive', 'negative', 'neutral'],
+    },
+};
+
+let pipelineFactory = null; // cached import
+let loadedModels = {};      // { modelKey: classifier }
+let activeModelKey = null;
 let modelLoading = false;
 let modelReady = false;
 
-async function loadModel(onProgress) {
-    if (modelReady || modelLoading) return;
+function pickModelKey(langCode) {
+    if (!langCode || langCode === 'en') return 'emotion';
+    if (ML_MODELS.multilingual.langs.includes(langCode)) return 'multilingual';
+    return 'multilingual'; // fallback to multilingual for unknown languages
+}
+
+async function ensurePipeline() {
+    if (!pipelineFactory) {
+        const mod = await import(
+            'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2'
+        );
+        pipelineFactory = mod.pipeline;
+        mod.env.allowLocalModels = false;
+    }
+    return pipelineFactory;
+}
+
+// Load model for the given language. Can load multiple models and cache them.
+async function loadModel(onProgress, langCode = null) {
+    const key = pickModelKey(langCode);
+    const config = key === 'emotion' ? ML_MODELS.emotion : ML_MODELS.multilingual;
+
+    // Already loaded this model
+    if (loadedModels[key]) {
+        activeModelKey = key;
+        modelReady = true;
+        if (onProgress) onProgress({ status: 'ready', message: `${config.id.split('/')[1]} ready` });
+        return;
+    }
+
+    if (modelLoading) return;
     modelLoading = true;
 
     try {
-        const { pipeline, env } = await import(
-            'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2'
-        );
-        env.allowLocalModels = false;
+        const pipe = await ensurePipeline();
 
-        if (onProgress) onProgress({ status: 'loading', message: 'Downloading emotion model...' });
+        if (onProgress) onProgress({
+            status: 'loading',
+            message: `Downloading ${key === 'emotion' ? 'emotion' : 'multilingual'} model...`,
+        });
 
-        mlClassifier = await pipeline(
-            'text-classification',
-            'Xenova/distilbert-base-uncased-emotion',
-            {
-                progress_callback: (data) => {
-                    if (onProgress && data.progress !== undefined) {
-                        onProgress({
-                            status: 'progress',
-                            progress: data.progress,
-                            message: `Downloading: ${Math.round(data.progress)}%`,
-                        });
-                    }
-                },
-            }
-        );
+        loadedModels[key] = await pipe('text-classification', config.id, {
+            progress_callback: (data) => {
+                if (onProgress && data.progress !== undefined) {
+                    onProgress({
+                        status: 'progress',
+                        progress: data.progress,
+                        message: `Downloading: ${Math.round(data.progress)}%`,
+                    });
+                }
+            },
+        });
 
+        activeModelKey = key;
         modelReady = true;
         modelLoading = false;
         if (onProgress) onProgress({ status: 'ready', message: 'Model ready' });
@@ -347,19 +390,76 @@ async function loadModel(onProgress) {
     }
 }
 
-async function analyzeML(text) {
-    if (!mlClassifier || !modelReady) return null;
+// Switch active model based on language (loads if needed)
+async function switchModelForLang(langCode, onProgress) {
+    const key = pickModelKey(langCode);
+    if (loadedModels[key]) {
+        activeModelKey = key;
+        modelReady = true;
+        return;
+    }
+    // Need to download
+    await loadModel(onProgress, langCode);
+}
+
+// Map sentiment labels (positive/negative/neutral) to emotion using lexicon hints
+function sentimentToEmotion(sentimentLabel, sentimentScore, lexiconScores) {
+    if (sentimentLabel === 'neutral') return { dominant: 'calm', confidence: sentimentScore * 0.7 };
+
+    if (sentimentLabel === 'positive') {
+        // Use lexicon to disambiguate: joy vs love vs calm
+        const candidates = ['joy', 'love', 'calm', 'surprise'];
+        let best = 'joy', bestScore = 0;
+        for (const c of candidates) {
+            if ((lexiconScores[c] || 0) > bestScore) {
+                bestScore = lexiconScores[c];
+                best = c;
+            }
+        }
+        return { dominant: best, confidence: sentimentScore };
+    }
+
+    // negative
+    const candidates = ['sadness', 'anger', 'fear'];
+    let best = 'sadness', bestScore = 0;
+    for (const c of candidates) {
+        if ((lexiconScores[c] || 0) > bestScore) {
+            bestScore = lexiconScores[c];
+            best = c;
+        }
+    }
+    return { dominant: best, confidence: sentimentScore };
+}
+
+async function analyzeML(text, lexiconScores) {
+    if (!modelReady || !activeModelKey || !loadedModels[activeModelKey]) return null;
 
     try {
-        // Emotion model returns top-k labels: joy, sadness, anger, fear, surprise, love
-        const result = await mlClassifier(text, { topk: 6 });
+        const classifier = loadedModels[activeModelKey];
+        const config = activeModelKey === 'emotion' ? ML_MODELS.emotion : ML_MODELS.multilingual;
+        const result = await classifier(text, { topk: config.labels.length });
         const top = result[0];
 
-        return {
-            dominant: top.label,
-            confidence: top.score,
-            allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
-        };
+        if (config.type === 'emotion') {
+            // Direct emotion labels
+            return {
+                dominant: top.label,
+                confidence: top.score,
+                allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
+                modelType: 'emotion',
+            };
+        } else {
+            // Sentiment → emotion mapping using lexicon as hint
+            const mapped = sentimentToEmotion(top.label, top.score, lexiconScores || {});
+            return {
+                dominant: mapped.dominant,
+                confidence: mapped.confidence,
+                sentimentLabel: top.label,
+                sentimentScore: top.score,
+                allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
+                modelType: 'sentiment',
+            };
+        }
     } catch {
         return null;
     }
@@ -391,8 +491,14 @@ async function analyzeText(text, langOverride = null) {
     let emotion = analyzeLexicon(text);
 
     // If ML model is available, use it (much better than lexicon)
-    if (modelReady) {
-        const mlResult = await analyzeML(text);
+    if (modelReady && activeModelKey) {
+        // Auto-switch model if language doesn't match
+        const neededKey = pickModelKey(language.lang);
+        if (neededKey !== activeModelKey && loadedModels[neededKey]) {
+            activeModelKey = neededKey;
+        }
+
+        const mlResult = await analyzeML(text, emotion.scores);
         if (mlResult) {
             emotion = {
                 ...emotion,
@@ -400,6 +506,8 @@ async function analyzeText(text, langOverride = null) {
                 confidence: mlResult.confidence,
                 allScores: mlResult.allScores,
                 mlEnhanced: true,
+                modelType: mlResult.modelType,
+                sentimentLabel: mlResult.sentimentLabel,
             };
         }
     }
@@ -414,9 +522,10 @@ export {
     detectLanguage,
     getLanguageInfo,
     loadModel,
+    switchModelForLang,
     splitSentences,
     getLastNSentences,
-    modelReady,
     LANG_NAMES,
     LANG_SPEED,
+    ML_MODELS,
 };
