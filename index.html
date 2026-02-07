@@ -35,6 +35,36 @@
                     <button data-mode="last3" class="mode-btn" title="Analyze last 3 sentences">Last 3</button>
                 </div>
             </div>
+            <div class="controls-center">
+                <label class="lang-select-label" for="lang-select">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                </label>
+                <select id="lang-select" class="lang-dropdown" title="Language (affects animation speed)">
+                    <option value="auto">Auto-detect</option>
+                    <optgroup label="Romance">
+                        <option value="it">Italiano</option>
+                        <option value="es">Espa&#241;ol</option>
+                        <option value="fr">Fran&#231;ais</option>
+                        <option value="pt">Portugu&#234;s</option>
+                    </optgroup>
+                    <optgroup label="Germanic">
+                        <option value="en">English</option>
+                        <option value="de">Deutsch</option>
+                    </optgroup>
+                    <optgroup label="Slavic">
+                        <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
+                    </optgroup>
+                    <optgroup label="CJK">
+                        <option value="ja">&#26085;&#26412;&#35486;</option>
+                        <option value="zh">&#20013;&#25991;</option>
+                        <option value="ko">&#54620;&#44397;&#50612;</option>
+                    </optgroup>
+                    <optgroup label="Other">
+                        <option value="ar">&#1575;&#1604;&#1593;&#1585;&#1576;&#1610;&#1577;</option>
+                        <option value="hi">&#2361;&#2367;&#2344;&#2381;&#2342;&#2368;</option>
+                    </optgroup>
+                </select>
+            </div>
             <div class="controls-right">
                 <button id="generate-btn" class="action-btn primary" title="Generate art from text">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>

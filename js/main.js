@@ -31,6 +31,7 @@ const MOOD_ICONS = {
 
 // ===== App State =====
 let mode = 'ondemand'; // 'ondemand' | 'live' | 'last3'
+let langOverride = null; // null = auto-detect, or a lang code like 'it'
 let engine = null;
 let debounceTimer = null;
 let autosaveTimer = null;
@@ -49,6 +50,7 @@ const loadModelBtn = document.getElementById('load-model-btn');
 const modelStatus = document.getElementById('model-status');
 const modelProgress = document.getElementById('model-progress');
 const modelStatusText = document.getElementById('model-status-text');
+const langSelect = document.getElementById('lang-select');
 const modeButtons = document.querySelectorAll('.mode-btn');
 
 // ===== Init =====
@@ -68,6 +70,7 @@ function init() {
     fullscreenBtn.addEventListener('click', toggleFullscreen);
     saveBtn.addEventListener('click', onSave);
     loadModelBtn.addEventListener('click', onLoadModel);
+    langSelect.addEventListener('change', onLangChange);
 
     modeButtons.forEach(btn => {
         btn.addEventListener('click', () => setMode(btn.dataset.mode));
@@ -142,6 +145,20 @@ function scheduleAnalysis() {
     }, 300);
 }
 
+// ===== Language Override =====
+function onLangChange() {
+    const val = langSelect.value;
+    langOverride = val === 'auto' ? null : val;
+
+    // Re-analyze with new language if there's text
+    if (editor.value.trim().length > 0) {
+        const text = mode === 'last3'
+            ? getLastNSentences(editor.value, 3)
+            : editor.value;
+        runAnalysis(text);
+    }
+}
+
 // ===== Generate (on-demand) =====
 function onGenerate() {
     const text = editor.value.trim();
@@ -160,26 +177,26 @@ function onGenerate() {
 // ===== Analysis + Animation Update =====
 async function runAnalysis(text) {
     if (!text || text.trim().length === 0) {
-        updateMoodDisplay('calm', null);
+        updateMoodDisplay('calm', null, false);
         engine.setMood('calm', 1.0);
         return;
     }
 
-    const result = await analyzeText(text);
+    const result = await analyzeText(text, langOverride);
     lastAnalysis = result;
 
     const { emotion, language } = result;
-    updateMoodDisplay(emotion.dominant, language);
+    updateMoodDisplay(emotion.dominant, language, emotion.mlEnhanced);
     engine.setMood(emotion.dominant, language.speedMultiplier);
 }
 
 // ===== UI Updates =====
-function updateMoodDisplay(mood, language) {
+function updateMoodDisplay(mood, language, mlEnhanced) {
     const label = MOOD_LABELS[mood] || 'Calm';
     const icon = MOOD_ICONS[mood] || '';
 
     moodEmoji.textContent = icon;
-    moodLabel.textContent = label;
+    moodLabel.textContent = mlEnhanced ? `${label} (AI)` : label;
 
     if (language && language.confidence > 0.1) {
         langIndicator.textContent = language.name;

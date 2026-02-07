@@ -303,6 +303,8 @@ function getLastNSentences(text, n = 3) {
 }
 
 // ===== ML Model (Transformers.js) =====
+// Model: Xenova/distilbert-base-uncased-emotion
+// Labels: joy, sadness, anger, fear, surprise, love
 let mlClassifier = null;
 let modelLoading = false;
 let modelReady = false;
@@ -315,14 +317,13 @@ async function loadModel(onProgress) {
         const { pipeline, env } = await import(
             'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2'
         );
-        // Use WASM backend, disable local model check
         env.allowLocalModels = false;
 
         if (onProgress) onProgress({ status: 'loading', message: 'Downloading emotion model...' });
 
         mlClassifier = await pipeline(
             'text-classification',
-            'Xenova/distilbert-base-uncased-finetuned-sst-2-english',
+            'Xenova/distilbert-base-uncased-emotion',
             {
                 progress_callback: (data) => {
                     if (onProgress && data.progress !== undefined) {
@@ -350,46 +351,54 @@ async function analyzeML(text) {
     if (!mlClassifier || !modelReady) return null;
 
     try {
-        const result = await mlClassifier(text, { topk: 2 });
-        // SST-2 returns POSITIVE/NEGATIVE labels
-        const label = result[0].label;
-        const score = result[0].score;
+        // Emotion model returns top-k labels: joy, sadness, anger, fear, surprise, love
+        const result = await mlClassifier(text, { topk: 6 });
+        const top = result[0];
 
-        // Map POSITIVE/NEGATIVE to emotions with nuance
-        if (label === 'POSITIVE') {
-            return score > 0.9
-                ? { dominant: 'joy', confidence: score }
-                : { dominant: 'calm', confidence: score * 0.8 };
-        } else {
-            return score > 0.9
-                ? { dominant: 'sadness', confidence: score }
-                : { dominant: 'anger', confidence: score * 0.7 };
-        }
+        return {
+            dominant: top.label,
+            confidence: top.score,
+            allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
+        };
     } catch {
         return null;
     }
 }
 
+// ===== Get language info by code (for manual override) =====
+function getLanguageInfo(langCode) {
+    return {
+        lang: langCode,
+        confidence: 1,
+        name: LANG_NAMES[langCode] || langCode,
+        speedMultiplier: LANG_SPEED[langCode] || 1.0,
+    };
+}
+
 // ===== Combined Analysis =====
-async function analyzeText(text) {
+// langOverride: null for auto-detect, or a language code (e.g. 'it', 'en')
+async function analyzeText(text, langOverride = null) {
     if (!text || text.trim().length === 0) {
         return {
             emotion: { dominant: 'calm', confidence: 0, scores: {} },
-            language: { lang: 'en', confidence: 0, name: 'English', speedMultiplier: 1.0 },
+            language: langOverride
+                ? getLanguageInfo(langOverride)
+                : { lang: 'en', confidence: 0, name: 'English', speedMultiplier: 1.0 },
         };
     }
 
-    const language = detectLanguage(text);
+    const language = langOverride ? getLanguageInfo(langOverride) : detectLanguage(text);
     let emotion = analyzeLexicon(text);
 
-    // If ML model is available and lexicon confidence is low, enhance with ML
-    if (modelReady && emotion.matchCount < 3) {
+    // If ML model is available, use it (much better than lexicon)
+    if (modelReady) {
         const mlResult = await analyzeML(text);
-        if (mlResult && mlResult.confidence > emotion.confidence) {
+        if (mlResult) {
             emotion = {
                 ...emotion,
                 dominant: mlResult.dominant,
                 confidence: mlResult.confidence,
+                allScores: mlResult.allScores,
                 mlEnhanced: true,
             };
         }
@@ -403,8 +412,11 @@ export {
     analyzeText,
     analyzeLexicon,
     detectLanguage,
+    getLanguageInfo,
     loadModel,
     splitSentences,
     getLastNSentences,
     modelReady,
+    LANG_NAMES,
+    LANG_SPEED,
 };
