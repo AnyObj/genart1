@@ -233,7 +233,8 @@ function updateMoodDisplay(mood, language, emotion) {
     moodEmoji.textContent = icon;
     let suffix = '';
     if (emotion && emotion.mlEnhanced) {
-        suffix = emotion.modelType === 'sentiment' ? ' (AI multi)' : ' (AI)';
+        const rawInfo = emotion.rawLabel ? ` [${emotion.rawLabel}]` : '';
+        suffix = emotion.modelType === 'stars' ? ` (AI)${rawInfo}` : ` (AI)${rawInfo}`;
     }
     moodLabel.textContent = label + suffix;
 

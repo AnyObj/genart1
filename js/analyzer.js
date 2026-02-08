@@ -161,80 +161,74 @@ const EMOTION_LEXICON = {
     'frieden': { calm: 3 }, 'ruhig': { calm: 3 }, 'stille': { calm: 2 },
 };
 
-// ===== Language Detection via Trigram Profiles =====
-const LANG_PROFILES = {
-    en: 'the and ing ion tio ent ati for her ter hat tha ere his res ver all ons ith was rea are not',
-    it: 'che ell ato ion one per ent are nte con ata tti ess tta eri anz del non tto gli zione all',
-    es: 'que ión los del las ent con ado ción nte ero est por ara mos cia aba ies ado ier tra nes',
-    fr: 'les ent des que ion ous ait eur ont pas ais men eme est com par eur sur tion iss dans',
-    de: 'ein ich der die und den sch cht ber ung eit ver gen ter hen ach ine ges auf ste lic',
-    pt: 'que ção ent ado ment ões est ção nte era mos con ado cia par ade ter com por ais pro',
-    ru: 'ого что ать ени ест про ком ать ост ств это как для ных все ние при его мен ной',
-    ja: 'のの をの にの はの との たの ての での ます かの がの しの いの もの れの なの',
-    zh: '的是 是不 不了 了一 一在 在有 有人 人我 我他 他这 这个 个们 们中 中来 来上',
-    ar: 'الع في من على وال ها ان ية ات ين لم بال ما كان ذلك هذا الم قال ذال',
-    ko: '이다 하는 에서 으로 것이 하고 에는 하여 되는 한다 있는 지않 는것 부터',
-    hi: 'का है में के ने की से को और पर हैं एक यह',
-};
+// ===== Language Detection via franc-min (82 languages) =====
+// Loaded dynamically from CDN as ESM
+let francDetect = null;
 
-// Build trigram sets from profiles
-const langTrigrams = {};
-for (const [lang, profile] of Object.entries(LANG_PROFILES)) {
-    langTrigrams[lang] = new Set(profile.split(' '));
+async function ensureFranc() {
+    if (!francDetect) {
+        try {
+            const mod = await import('https://esm.sh/franc-min@6');
+            francDetect = mod.franc;
+        } catch (err) {
+            console.warn('franc-min failed to load, using fallback detection:', err);
+        }
+    }
+    return francDetect;
 }
 
+// franc returns ISO 639-3 codes, we need ISO 639-1
+const ISO3_TO_ISO1 = {
+    eng: 'en', ita: 'it', spa: 'es', fra: 'fr', deu: 'de', por: 'pt',
+    rus: 'ru', jpn: 'ja', cmn: 'zh', arb: 'ar', kor: 'ko', hin: 'hi',
+    nld: 'nl', pol: 'pl', tur: 'tr', swe: 'sv', dan: 'da', nor: 'no',
+    fin: 'fi', ron: 'ro', hun: 'hu', ces: 'cs', ell: 'el', heb: 'he',
+    tha: 'th', vie: 'vi', ind: 'id', ukr: 'uk', cat: 'ca',
+};
+
 const LANG_NAMES = {
-    en: 'English', it: 'Italiano', es: 'Español', fr: 'Français',
-    de: 'Deutsch', pt: 'Português', ru: 'Русский', ja: '日本語',
-    zh: '中文', ar: 'العربية', ko: '한국어', hi: 'हिन्दी',
+    en: 'English', it: 'Italiano', es: 'Espanol', fr: 'Francais',
+    de: 'Deutsch', pt: 'Portugues', ru: 'Russkiy', ja: 'Nihongo',
+    zh: 'Zhongwen', ar: 'Arabiyya', ko: 'Hangugeo', hi: 'Hindi',
+    nl: 'Nederlands', pl: 'Polski', tr: 'Turkce', sv: 'Svenska',
+    da: 'Dansk', no: 'Norsk', fi: 'Suomi', ro: 'Romana',
+    hu: 'Magyar', cs: 'Cestina', el: 'Ellinika', he: 'Ivrit',
+    th: 'Thai', vi: 'Tieng Viet', id: 'Bahasa', uk: 'Ukrainska',
+    ca: 'Catala',
 };
 
 // Speed multiplier per language family
 const LANG_SPEED = {
-    it: 1.3, es: 1.3, pt: 1.25, fr: 1.15,  // Romance: faster, flowing
-    en: 1.0, de: 0.9, nl: 0.9,              // Germanic: moderate
-    ja: 0.8, zh: 0.85, ko: 0.8,             // CJK: measured
-    ru: 1.1, pl: 1.05,                       // Slavic: dynamic
-    ar: 1.1, hi: 1.05,                       // flowing
+    it: 1.3, es: 1.3, pt: 1.25, fr: 1.15, ca: 1.2, ro: 1.2,  // Romance
+    en: 1.0, de: 0.9, nl: 0.9, sv: 0.85, da: 0.85, no: 0.85,  // Germanic
+    ja: 0.8, zh: 0.85, ko: 0.8,                                  // CJK
+    ru: 1.1, pl: 1.05, cs: 1.0, uk: 1.1,                        // Slavic
+    ar: 1.1, hi: 1.05, he: 1.0, th: 0.9, vi: 1.0,              // Other
+    tr: 1.05, fi: 0.85, hu: 0.95, el: 1.1, id: 1.0,
 };
 
-function extractTrigrams(text) {
-    const clean = text.toLowerCase().replace(/[0-9\s]+/g, ' ').trim();
-    const trigrams = {};
-    for (let i = 0; i < clean.length - 2; i++) {
-        const tri = clean.substring(i, i + 3);
-        trigrams[tri] = (trigrams[tri] || 0) + 1;
+async function detectLanguage(text) {
+    if (!text || text.trim().length < 10) {
+        return { lang: 'en', confidence: 0, name: 'English', speedMultiplier: 1.0 };
     }
-    return trigrams;
-}
 
-function detectLanguage(text) {
-    if (!text || text.trim().length < 10) return { lang: 'en', confidence: 0 };
+    const detect = await ensureFranc();
 
-    const textTrigrams = extractTrigrams(text);
-    const textTriSet = new Set(Object.keys(textTrigrams));
-
-    let bestLang = 'en';
-    let bestScore = 0;
-
-    for (const [lang, profileSet] of Object.entries(langTrigrams)) {
-        let matches = 0;
-        for (const tri of textTriSet) {
-            if (profileSet.has(tri)) matches++;
-        }
-        const score = matches / Math.max(profileSet.size, 1);
-        if (score > bestScore) {
-            bestScore = score;
-            bestLang = lang;
+    if (detect) {
+        const iso3 = detect(text);
+        if (iso3 && iso3 !== 'und') {
+            const iso1 = ISO3_TO_ISO1[iso3] || iso3.slice(0, 2);
+            return {
+                lang: iso1,
+                confidence: 0.8,
+                name: LANG_NAMES[iso1] || iso1,
+                speedMultiplier: LANG_SPEED[iso1] || 1.0,
+            };
         }
     }
 
-    return {
-        lang: bestLang,
-        confidence: Math.min(bestScore * 5, 1),
-        name: LANG_NAMES[bestLang] || bestLang,
-        speedMultiplier: LANG_SPEED[bestLang] || 1.0,
-    };
+    // Fallback: simple heuristic if franc fails
+    return { lang: 'en', confidence: 0.2, name: 'English', speedMultiplier: 1.0 };
 }
 
 // ===== Lexicon-based Emotion Analysis =====
@@ -303,20 +297,28 @@ function getLastNSentences(text, n = 3) {
 }
 
 // ===== ML Models (Transformers.js) =====
-// English: Xenova/distilbert-base-uncased-emotion → joy, sadness, anger, fear, surprise, love
-// Multilingual (IT/ES/FR/DE/PT...): Xenova/distilbert-base-multilingual-cased-sentiments-student → positive, negative, neutral
+// All model IDs verified to exist on HuggingFace with ONNX weights.
+//
+// English: Xenova/distilbert-base-uncased-finetuned-sst-2-english
+//   Labels: POSITIVE, NEGATIVE (binary sentiment)
+//
+// Multilingual: Xenova/bert-base-multilingual-uncased-sentiment
+//   Labels: 1 star, 2 stars, 3 stars, 4 stars, 5 stars
+//   Trained on 72k Italian, 30k English, 30k German, 24k French, 20k Spanish, 12k Dutch reviews
+//
+// Both use lexicon hints to map sentiment → specific emotion.
 const ML_MODELS = {
-    emotion: {
-        id: 'Xenova/distilbert-base-uncased-emotion',
-        type: 'emotion',
+    english: {
+        id: 'Xenova/distilbert-base-uncased-finetuned-sst-2-english',
+        type: 'binary',
         langs: ['en'],
-        labels: ['joy', 'sadness', 'anger', 'fear', 'surprise', 'love'],
+        labels: ['POSITIVE', 'NEGATIVE'],
     },
     multilingual: {
-        id: 'Xenova/distilbert-base-multilingual-cased-sentiments-student',
-        type: 'sentiment',
-        langs: ['it', 'es', 'fr', 'de', 'pt', 'ar', 'zh', 'hi', 'ja', 'ko', 'ru'],
-        labels: ['positive', 'negative', 'neutral'],
+        id: 'Xenova/bert-base-multilingual-uncased-sentiment',
+        type: 'stars',
+        langs: ['it', 'es', 'fr', 'de', 'pt', 'nl', 'en'],
+        labels: ['1 star', '2 stars', '3 stars', '4 stars', '5 stars'],
     },
 };
 
@@ -327,9 +329,12 @@ let modelLoading = false;
 let modelReady = false;
 
 function pickModelKey(langCode) {
-    if (!langCode || langCode === 'en') return 'emotion';
-    if (ML_MODELS.multilingual.langs.includes(langCode)) return 'multilingual';
-    return 'multilingual'; // fallback to multilingual for unknown languages
+    // Use multilingual for any language it supports (incl. English, since it handles stars)
+    if (langCode && ML_MODELS.multilingual.langs.includes(langCode)) return 'multilingual';
+    // For English or unknown, use the English binary model
+    if (!langCode || langCode === 'en') return 'english';
+    // For languages not covered by multilingual, try it anyway (it's BERT multilingual)
+    return 'multilingual';
 }
 
 async function ensurePipeline() {
@@ -346,13 +351,14 @@ async function ensurePipeline() {
 // Load model for the given language. Can load multiple models and cache them.
 async function loadModel(onProgress, langCode = null) {
     const key = pickModelKey(langCode);
-    const config = key === 'emotion' ? ML_MODELS.emotion : ML_MODELS.multilingual;
+    const config = ML_MODELS[key];
 
     // Already loaded this model
     if (loadedModels[key]) {
         activeModelKey = key;
         modelReady = true;
-        if (onProgress) onProgress({ status: 'ready', message: `${config.id.split('/')[1]} ready` });
+        const shortName = config.id.split('/')[1];
+        if (onProgress) onProgress({ status: 'ready', message: `${shortName} ready` });
         return;
     }
 
@@ -361,10 +367,11 @@ async function loadModel(onProgress, langCode = null) {
 
     try {
         const pipe = await ensurePipeline();
+        const label = key === 'english' ? 'English sentiment' : 'multilingual sentiment';
 
         if (onProgress) onProgress({
             status: 'loading',
-            message: `Downloading ${key === 'emotion' ? 'emotion' : 'multilingual'} model...`,
+            message: `Downloading ${label} model...`,
         });
 
         loadedModels[key] = await pipe('text-classification', config.id, {
@@ -402,24 +409,20 @@ async function switchModelForLang(langCode, onProgress) {
     await loadModel(onProgress, langCode);
 }
 
-// Map sentiment labels (positive/negative/neutral) to emotion using lexicon hints
-function sentimentToEmotion(sentimentLabel, sentimentScore, lexiconScores) {
-    if (sentimentLabel === 'neutral') return { dominant: 'calm', confidence: sentimentScore * 0.7 };
-
-    if (sentimentLabel === 'positive') {
-        // Use lexicon to disambiguate: joy vs love vs calm
-        const candidates = ['joy', 'love', 'calm', 'surprise'];
-        let best = 'joy', bestScore = 0;
-        for (const c of candidates) {
-            if ((lexiconScores[c] || 0) > bestScore) {
-                bestScore = lexiconScores[c];
-                best = c;
-            }
+// Map ML sentiment output → specific emotion, using lexicon scores as hints
+function pickPositiveEmotion(lexiconScores) {
+    const candidates = ['joy', 'love', 'surprise', 'calm'];
+    let best = 'joy', bestScore = 0;
+    for (const c of candidates) {
+        if ((lexiconScores[c] || 0) > bestScore) {
+            bestScore = lexiconScores[c];
+            best = c;
         }
-        return { dominant: best, confidence: sentimentScore };
     }
+    return best;
+}
 
-    // negative
+function pickNegativeEmotion(lexiconScores) {
     const candidates = ['sadness', 'anger', 'fear'];
     let best = 'sadness', bestScore = 0;
     for (const c of candidates) {
@@ -428,7 +431,25 @@ function sentimentToEmotion(sentimentLabel, sentimentScore, lexiconScores) {
             best = c;
         }
     }
-    return { dominant: best, confidence: sentimentScore };
+    return best;
+}
+
+// Map star ratings (1-5) to emotion
+function starsToEmotion(starLabel, score, lexiconScores) {
+    const stars = parseInt(starLabel);
+    if (stars >= 5) return { dominant: pickPositiveEmotion(lexiconScores), confidence: score };
+    if (stars === 4) return { dominant: pickPositiveEmotion(lexiconScores), confidence: score * 0.8 };
+    if (stars === 3) return { dominant: 'calm', confidence: score * 0.6 };
+    if (stars === 2) return { dominant: pickNegativeEmotion(lexiconScores), confidence: score * 0.8 };
+    return { dominant: pickNegativeEmotion(lexiconScores), confidence: score };
+}
+
+// Map binary POSITIVE/NEGATIVE to emotion
+function binaryToEmotion(label, score, lexiconScores) {
+    if (label === 'POSITIVE') {
+        return { dominant: pickPositiveEmotion(lexiconScores), confidence: score };
+    }
+    return { dominant: pickNegativeEmotion(lexiconScores), confidence: score };
 }
 
 async function analyzeML(text, lexiconScores) {
@@ -436,30 +457,25 @@ async function analyzeML(text, lexiconScores) {
 
     try {
         const classifier = loadedModels[activeModelKey];
-        const config = activeModelKey === 'emotion' ? ML_MODELS.emotion : ML_MODELS.multilingual;
+        const config = ML_MODELS[activeModelKey];
         const result = await classifier(text, { topk: config.labels.length });
         const top = result[0];
 
-        if (config.type === 'emotion') {
-            // Direct emotion labels
-            return {
-                dominant: top.label,
-                confidence: top.score,
-                allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
-                modelType: 'emotion',
-            };
+        let mapped;
+        if (config.type === 'stars') {
+            mapped = starsToEmotion(top.label, top.score, lexiconScores || {});
         } else {
-            // Sentiment → emotion mapping using lexicon as hint
-            const mapped = sentimentToEmotion(top.label, top.score, lexiconScores || {});
-            return {
-                dominant: mapped.dominant,
-                confidence: mapped.confidence,
-                sentimentLabel: top.label,
-                sentimentScore: top.score,
-                allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
-                modelType: 'sentiment',
-            };
+            mapped = binaryToEmotion(top.label, top.score, lexiconScores || {});
         }
+
+        return {
+            dominant: mapped.dominant,
+            confidence: mapped.confidence,
+            rawLabel: top.label,
+            rawScore: top.score,
+            allScores: Object.fromEntries(result.map(r => [r.label, r.score])),
+            modelType: config.type,
+        };
     } catch {
         return null;
     }
@@ -487,7 +503,7 @@ async function analyzeText(text, langOverride = null) {
         };
     }
 
-    const language = langOverride ? getLanguageInfo(langOverride) : detectLanguage(text);
+    const language = langOverride ? getLanguageInfo(langOverride) : await detectLanguage(text);
     let emotion = analyzeLexicon(text);
 
     // If ML model is available, use it (much better than lexicon)
@@ -507,7 +523,7 @@ async function analyzeText(text, langOverride = null) {
                 allScores: mlResult.allScores,
                 mlEnhanced: true,
                 modelType: mlResult.modelType,
-                sentimentLabel: mlResult.sentimentLabel,
+                rawLabel: mlResult.rawLabel,
             };
         }
     }
