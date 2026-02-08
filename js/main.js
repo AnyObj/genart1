@@ -212,7 +212,7 @@ function onGenerate() {
 // ===== Analysis + Animation Update =====
 async function runAnalysis(text) {
     if (!text || text.trim().length === 0) {
-        updateMoodDisplay('calm', null, null);
+        updateMoodDisplay('calm', null, null, null);
         engine.setMood('calm', 1.0);
         return;
     }
@@ -220,23 +220,25 @@ async function runAnalysis(text) {
     const result = await analyzeText(text, langOverride);
     lastAnalysis = result;
 
-    const { emotion, language } = result;
-    updateMoodDisplay(emotion.dominant, language, emotion);
+    const { emotion, language, vad, nuance } = result;
+    updateMoodDisplay(emotion.dominant, language, emotion, nuance);
     engine.setMood(emotion.dominant, language.speedMultiplier);
+    if (vad) engine.setVAD(vad);
 }
 
 // ===== UI Updates =====
-function updateMoodDisplay(mood, language, emotion) {
+function updateMoodDisplay(mood, language, emotion, nuance) {
     const label = MOOD_LABELS[mood] || 'Calm';
     const icon = MOOD_ICONS[mood] || '';
 
     moodEmoji.textContent = icon;
-    let suffix = '';
+
+    // Build label: "Nuance" or "Emotion" + optional AI indicator
+    let displayLabel = nuance || label;
     if (emotion && emotion.mlEnhanced) {
-        const rawInfo = emotion.rawLabel ? ` [${emotion.rawLabel}]` : '';
-        suffix = emotion.modelType === 'stars' ? ` (AI)${rawInfo}` : ` (AI)${rawInfo}`;
+        displayLabel += ' (AI)';
     }
-    moodLabel.textContent = label + suffix;
+    moodLabel.textContent = displayLabel;
 
     if (language && language.confidence > 0.1) {
         langIndicator.textContent = language.name;

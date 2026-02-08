@@ -491,6 +491,124 @@ function getLanguageInfo(langCode) {
     };
 }
 
+// ===== VAD (Valence-Arousal-Dominance) Analysis =====
+let vadLexicon = null;
+let vadLoading = false;
+
+async function ensureVAD() {
+    if (vadLexicon) return vadLexicon;
+    if (vadLoading) return null;
+    vadLoading = true;
+    try {
+        const resp = await fetch(new URL('./vad-lexicon.json', import.meta.url));
+        vadLexicon = await resp.json();
+        vadLoading = false;
+        return vadLexicon;
+    } catch (err) {
+        console.warn('VAD lexicon failed to load:', err);
+        vadLoading = false;
+        return null;
+    }
+}
+
+// Compute average VAD from text words
+function computeVAD(text, langCode) {
+    if (!vadLexicon) return null;
+
+    const words = text.toLowerCase()
+        .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+        .split(/\s+/)
+        .filter(w => w.length > 1);
+
+    // Try both the specific language and English as fallback
+    const langDict = vadLexicon[langCode] || {};
+    const enDict = vadLexicon.en || {};
+
+    let sumV = 0, sumA = 0, sumD = 0, count = 0;
+
+    for (const word of words) {
+        const entry = langDict[word] || enDict[word];
+        if (entry) {
+            sumV += entry[0];
+            sumA += entry[1];
+            sumD += entry[2];
+            count++;
+        }
+    }
+
+    if (count === 0) return { valence: 0.5, arousal: 0.3, dominance: 0.5, matchCount: 0 };
+
+    return {
+        valence: sumV / count,
+        arousal: sumA / count,
+        dominance: sumD / count,
+        matchCount: count,
+    };
+}
+
+// Nuance labels: 2x2 grid (arousal x dominance) for each base emotion
+const NUANCE_LABELS = {
+    joy: {
+        hA_hD: { en: 'Triumphant', it: 'Trionfante' },
+        hA_lD: { en: 'Euphoric', it: 'Euforica' },
+        lA_hD: { en: 'Content', it: 'Appagata' },
+        lA_lD: { en: 'Serene', it: 'Serena' },
+    },
+    sadness: {
+        hA_hD: { en: 'Bitter', it: 'Amara' },
+        hA_lD: { en: 'Anguished', it: 'Angosciata' },
+        lA_hD: { en: 'Melancholic', it: 'Malinconica' },
+        lA_lD: { en: 'Resigned', it: 'Rassegnata' },
+    },
+    anger: {
+        hA_hD: { en: 'Wrathful', it: 'Furibonda' },
+        hA_lD: { en: 'Explosive', it: 'Esplosiva' },
+        lA_hD: { en: 'Resentful', it: 'Rancorosa' },
+        lA_lD: { en: 'Frustrated', it: 'Frustrata' },
+    },
+    fear: {
+        hA_hD: { en: 'Alarmed', it: 'Allarmata' },
+        hA_lD: { en: 'Panicked', it: 'In panico' },
+        lA_hD: { en: 'Wary', it: 'Guardinga' },
+        lA_lD: { en: 'Anxious', it: 'Ansiosa' },
+    },
+    surprise: {
+        hA_hD: { en: 'Astonished', it: 'Sbalordita' },
+        hA_lD: { en: 'Shocked', it: 'Scioccata' },
+        lA_hD: { en: 'Impressed', it: 'Colpita' },
+        lA_lD: { en: 'Intrigued', it: 'Incuriosita' },
+    },
+    love: {
+        hA_hD: { en: 'Passionate', it: 'Appassionata' },
+        hA_lD: { en: 'Infatuated', it: 'Infatuata' },
+        lA_hD: { en: 'Devoted', it: 'Devota' },
+        lA_lD: { en: 'Tender', it: 'Tenera' },
+    },
+    calm: {
+        hA_hD: { en: 'Composed', it: 'Composta' },
+        hA_lD: { en: 'Relaxed', it: 'Rilassata' },
+        lA_hD: { en: 'Poised', it: 'Equilibrata' },
+        lA_lD: { en: 'Peaceful', it: 'Pacifica' },
+    },
+};
+
+function getNuanceLabel(emotion, vad, langCode) {
+    if (!vad || vad.matchCount === 0) return null;
+
+    const labels = NUANCE_LABELS[emotion];
+    if (!labels) return null;
+
+    const aKey = vad.arousal >= 0.5 ? 'hA' : 'lA';
+    const dKey = vad.dominance >= 0.5 ? 'hD' : 'lD';
+    const key = `${aKey}_${dKey}`;
+
+    const entry = labels[key];
+    if (!entry) return null;
+
+    // Use Italian label if language is Italian, otherwise English
+    return entry[langCode] || entry.it || entry.en;
+}
+
 // ===== Combined Analysis =====
 // langOverride: null for auto-detect, or a language code (e.g. 'it', 'en')
 async function analyzeText(text, langOverride = null) {
@@ -500,8 +618,13 @@ async function analyzeText(text, langOverride = null) {
             language: langOverride
                 ? getLanguageInfo(langOverride)
                 : { lang: 'en', confidence: 0, name: 'English', speedMultiplier: 1.0 },
+            vad: null,
+            nuance: null,
         };
     }
+
+    // Load VAD lexicon in background (non-blocking on first call)
+    ensureVAD();
 
     const language = langOverride ? getLanguageInfo(langOverride) : await detectLanguage(text);
     let emotion = analyzeLexicon(text);
@@ -528,7 +651,11 @@ async function analyzeText(text, langOverride = null) {
         }
     }
 
-    return { emotion, language };
+    // VAD nuance analysis
+    const vad = computeVAD(text, language.lang);
+    const nuance = getNuanceLabel(emotion.dominant, vad, language.lang);
+
+    return { emotion, language, vad, nuance };
 }
 
 // ===== Exports =====

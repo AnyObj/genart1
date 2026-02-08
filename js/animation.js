@@ -256,7 +256,7 @@ class Particle {
         }
     }
 
-    draw(ctx, glowIntensity) {
+    draw(ctx, glowIntensity, sizeMod = 1.0) {
         ctx.save();
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
@@ -270,7 +270,7 @@ class Particle {
         ctx.fillStyle = this.color;
         ctx.beginPath();
 
-        const s = this.size;
+        const s = this.size * sizeMod;
         switch (this.shape) {
             case 'circle':
                 ctx.arc(0, 0, s, 0, Math.PI * 2);
@@ -335,6 +335,8 @@ export class AnimationEngine {
         this.config = { ...MOOD_CONFIGS.calm };
         this.targetConfig = { ...MOOD_CONFIGS.calm };
         this.speedMultiplier = 1.0;
+        this.arousalMod = 1.0;   // from VAD: 0.5-1.5 speed/turbulence multiplier
+        this.dominanceMod = 1.0; // from VAD: 0.7-1.3 size/glow multiplier
         this.time = 0;
         this.running = false;
         this.animId = null;
@@ -374,6 +376,15 @@ export class AnimationEngine {
                 )
             );
         }
+    }
+
+    // Apply VAD dimensions to animation parameters
+    setVAD(vad) {
+        if (!vad || vad.matchCount === 0) return;
+        // Arousal: low (0) → slower/calmer, high (1) → faster/more turbulent
+        this.arousalMod = 0.5 + vad.arousal * 1.0; // range 0.5 to 1.5
+        // Dominance: low (0) → smaller/subtle, high (1) → larger/bolder
+        this.dominanceMod = 0.7 + vad.dominance * 0.6; // range 0.7 to 1.3
     }
 
     setMood(mood, speedMultiplier = 1.0) {
@@ -468,9 +479,10 @@ export class AnimationEngine {
         this.config.palette = this.targetConfig.palette;
         this.config.shapes = this.targetConfig.shapes;
 
-        // Update particles
+        // Update particles — arousal modulates speed
+        const effectiveSpeed = this.speedMultiplier * this.arousalMod;
         for (const p of this.particles) {
-            p.update(dt, this.config, this.time, this.width, this.height, this.speedMultiplier);
+            p.update(dt, this.config, this.time, this.width, this.height, effectiveSpeed);
         }
     }
 
@@ -507,9 +519,10 @@ export class AnimationEngine {
             }
         }
 
-        // Draw particles
+        // Draw particles — dominance modulates glow intensity
+        const effectiveGlow = this.config.glowIntensity * this.dominanceMod;
         for (const p of this.particles) {
-            p.draw(ctx, this.config.glowIntensity);
+            p.draw(ctx, effectiveGlow, this.dominanceMod);
         }
     }
 
